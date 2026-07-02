@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Critical Path Evaluator</title>
+<style>
+  body{margin:0;font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;}
+  header{background:#1e293b;padding:16px 24px;border-bottom:1px solid #334155;}
+  header h1{margin:0;font-size:20px;}
+  #status{font-size:12px;color:#22c55e;margin-top:4px;}
+  .layout{display:flex;gap:16px;padding:16px;flex-wrap:wrap;}
+  .sidebar{flex:1 1 340px;min-width:320px;} .main{flex:3 1 700px;min-width:480px;}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:16px;margin-bottom:16px;}
+  .card h2{margin:0 0 12px;font-size:14px;color:#38bdf8;text-transform:uppercase;letter-spacing:.5px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{padding:5px 4px;text-align:center;border-bottom:1px solid #334155;}
+  th{color:#94a3b8;}
+  input{width:100%;background:#273449;border:1px solid #334155;color:#e2e8f0;border-radius:6px;padding:5px;font-size:13px;text-align:center;}
+  input.name{text-align:left;}
+  button{background:#38bdf8;color:#04293a;border:none;padding:9px 14px;border-radius:8px;font-weight:600;cursor:pointer;font-size:13px;}
+  button:hover{filter:brightness(1.1);}
+  button.ghost{background:#273449;color:#e2e8f0;border:1px solid #334155;}
+  button.del{background:#7f1d1d;color:#fecaca;padding:4px 8px;}
+  .btn-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;}
+  .health-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .metric{background:#273449;border-radius:10px;padding:12px;text-align:center;}
+  .metric .v{font-size:22px;font-weight:700;color:#38bdf8;}
+  .metric .l{font-size:10px;color:#94a3b8;text-transform:uppercase;margin-top:2px;}
+  .metric.full{grid-column:1/-1;} .metric.full .v{font-size:14px;}
+  svg{width:100%;display:block;}
+  .legend{display:flex;gap:16px;font-size:12px;margin-top:8px;flex-wrap:wrap;}
+  .legend span{display:flex;align-items:center;gap:6px;}
+  .swatch{width:14px;height:14px;border-radius:3px;}
+  .err{color:#fca5a5;font-size:13px;padding:6px 0;}
+  .netwrap{background:#fff;border-radius:8px;padding:8px;overflow-x:auto;}
+</style>
+</head>
+<body>
+<header>
+  <h1>🛠️ Critical Path Evaluator</h1>
+  <div id="status">Loading…</div>
+</header>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="card">
+      <h2>Activities</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Dur</th><th>Preds</th><th>Res</th><th></th></tr></thead>
+        <tbody id="actBody"></tbody>
+      </table>
+      <div class="btn-row">
+        <button id="btnAdd">+ Add</button>
+        <button class="ghost" id="btnDemo">Load Demo</button>
+        <button class="ghost" id="btnClear">Clear</button>
+      </div>
+      <div id="error" class="err"></div>
+      <div class="btn-row"><button style="flex:1" id="btnEval">▶ Evaluate Project</button></div>
+    </div>
+    <div class="card"><h2>Project Health</h2><div class="health-grid" id="health"></div></div>
+  </div>
+
+  <div class="main">
+    <div class="card">
+      <h2>Network Diagram (Activity-on-Node)</h2>
+      <div class="netwrap"><div id="network"></div></div>
+      <div class="legend">
+        <span><div class="swatch" style="background:#f5a623"></div>Activity</span>
+        <span><div class="swatch" style="background:#ef4444"></div>Critical path</span>
+        <span><div class="swatch" style="background:#38bdf8"></div>Start / End</span>
+      </div>
+    </div>
+    <div class="card"><h2>Gantt Chart</h2><div id="gantt"></div>
+      <div class="legend">
+        <span><div class="swatch" style="background:#ef4444"></div>Critical</span>
+        <span><div class="swatch" style="background:#3b82f6"></div>Non-critical</span>
+        <span><div class="swatch" style="background:#475569"></div>Float</span>
+      </div>
+    </div>
+    <div class="card"><h2>Resource Loading (Earliest-Start)</h2><div id="resource"></div></div>
+  </div>
+</div>
+
+<script>
+/* ================= CPM ENGINE ================= */
+function topoOrder(acts){
+  var indeg={},succ={},id,p;
+  for(id in acts){indeg[id]=0;succ[id]=[];}
+  for(id in acts){for(var i=0;i<acts[id].preds.length;i++){p=acts[id].preds[i];indeg[id]++;succ[p].push(id);}}
+  var q=[];for(id in acts){if(indeg[id]===0)q.push(id);}
+  var order=[];
+  while(q.length){var n=q.shift();order.push(n);for(var j=0;j<succ[n].length;j++){var s=succ[n][j];if(--indeg[s]===0)q.push(s);}}
+  if(order.length!==Object.keys(acts).length)throw new Error("Cycle detected — check predecessors.");
+  return {order:order,succ:succ};
+}
+function calculate(acts){
+  for(var id in acts){for(var i=0;i<acts[id].preds.length;i++){var p=acts[id].preds[i];if(!acts[p])throw new Error('"'+id+'" references unknown predecessor "'+p+'".');}}
+  var t=topoOrder(acts),order=t.order,succ=t.succ;
+  var ES={},EF={},LS={},LF={},a;
+  for(var k=0;k<order.length;k++){a=order[k];var es=0;for(var m=0;m<acts[a].preds.length;m++)es=Math.max(es,EF[acts[a].preds[m]]);ES[a]=es;EF[a]=es+acts[a].dur;}
+  var duration=0;for(a in EF)duration=Math.max(duration,EF[a]);
+  for(var q=order.length-1;q>=0;q--){a=order[q];var s=succ[a];if(s.length){var lf=Infinity;for(var z=0;z<s.length;z++)lf=Math.min(lf,LS[s[z]]);LF[a]=lf;}else LF[a]=duration;LS[a]=LF[a]-acts[a].dur;}
+  var res={};
+  for(a in acts){
+    var TF=LS[a]-ES[a],s2=succ[a],FF;
+    if(s2.length){var minES=Infinity;for(var y=0;y<s2.length;y++)minES=Math.min(minES,ES[s2[y]]);FF=minES-EF[a];}else FF=TF;
+    res[a]={ES:ES[a],EF:EF[a],LS:LS[a],LF:LF[a],TF:TF,FF:FF,critical:Math.abs(TF)<1e-9};
+  }
+  return {res:res,duration:duration,order:order,succ:succ};
+}
+function criticalPath(acts,res,order,succ){
+  var crit={};for(var i=0;i<order.length;i++)if(res[order[i]].critical)crit[order[i]]=1;
+  var memo={};
+  function w(p){var t=0;for(var i=0;i<p.length;i++)t+=acts[p[i]].dur;return t;}
+  function longest(n){if(memo[n])return memo[n];var best=[n];for(var i=0;i<succ[n].length;i++){var s=succ[n][i];if(!crit[s])continue;var c=[n].concat(longest(s));if(w(c)>w(best))best=c;}return memo[n]=best;}
+  var starts=[];for(var a in crit){var isStart=true;for(var j=0;j<acts[a].preds.length;j++)if(crit[acts[a].preds[j]])isStart=false;if(isStart)starts.push(a);}
+  var best=[];for(var s=0;s<starts.length;s++){var c=longest(starts[s]);if(w(c)>w(best))best=c;}
+  return best;
+}
+
+/* ================= TABLE ================= */
+function addRow(id,name,dur,preds,res){
+  id=id||"";name=name||"";dur=dur||"";preds=preds||"";res=res||"";
+  var tr=document.createElement('tr');
+  tr.innerHTML='<td><input value="'+id+'" placeholder="A" style="width:42px"></td>'+
+    '<td><input class="name" value="'+name+'" placeholder="Task"></td>'+
+    '<td><input type="number" min="0" value="'+dur+'" style="width:48px"></td>'+
+    '<td><input value="'+preds+'" placeholder="A,B"></td>'+
+    '<td><input type="number" min="0" value="'+res+'" style="width:42px"></td>'+
+    '<td><button class="del" type="button">✕</button></td>';
+  document.getElementById('actBody').appendChild(tr);
+}
+function clearAll(){document.getElementById('actBody').innerHTML='';}
+function loadDemo(){
+  clearAll();
+  var d=[["A","Requirements",3,"",2],["B","Procurement",5,"A",3],["C","Network Design",4,"A",2],
+    ["D","Firmware Dev",6,"B",4],["E","Network Install",3,"C",3],["F","Integration",4,"D,E",4],
+    ["G","Testing",3,"F",2],["H","Training Docs",2,"F",1],["I","Go-Live",2,"G,H",3]];
+  for(var i=0;i<d.length;i++)addRow(d[i][0],d[i][1],d[i][2],d[i][3],d[i][4]);
+}
+function readTable(){
+  var acts={},rows=document.querySelectorAll('#actBody tr');
+  for(var i=0;i<rows.length;i++){
+    var c=rows[i].querySelectorAll('input'),id=c[0].value.trim();if(!id)continue;
+    var preds=c[3].value.split(',').map(function(s){return s.trim();}).filter(function(s){return s;});
+    acts[id]={name:c[1].value.trim()||id,dur:Number(c[2].value)||0,preds:preds,res:Number(c[4].value)||0};
+  }
+  return acts;
+}
+
+/* ================= EVALUATE ================= */
+function evaluate(){
+  var err=document.getElementById('error');err.textContent='';
+  try{
+    var acts=readTable();
+    if(!Object.keys(acts).length)throw new Error("Add at least one activity.");
+    var out=calculate(acts);
+    var cp=criticalPath(acts,out.res,out.order,out.succ);
+    renderHealth(acts,out.res,out.duration,cp);
+    renderNetwork(acts,out.res,out.order,out.succ,cp);
+    renderGantt(acts,out.res,out.duration);
+    renderResource(acts,out.res,out.duration);
+    document.getElementById('status').textContent='✓ Evaluated — '+Object.keys(acts).length+' activities, duration '+out.duration;
+  }catch(e){err.textContent="⚠ "+e.message;document.getElementById('status').textContent='⚠ '+e.message;}
+}
+
+function renderHealth(acts,res,duration,cp){
+  var ids=Object.keys(acts),nCrit=0,floats=[];
+  for(var i=0;i<ids.length;i++){if(res[ids[i]].critical)nCrit++;floats.push(res[ids[i]].TF);}
+  var sum=0,mx=0;for(var j=0;j<floats.length;j++){sum+=floats[j];mx=Math.max(mx,floats[j]);}
+  var avgF=(sum/floats.length).toFixed(2);
+  var path=cp.map(function(a){return acts[a].name;}).join(" → ");
+  var m=[["Total Duration",duration],["Activities",ids.length],["Critical Activities",nCrit],
+    ["Avg Float",avgF],["Critical %",(100*nCrit/ids.length).toFixed(0)+"%"],["Max Float",mx]];
+  var h='';for(var k=0;k<m.length;k++)h+='<div class="metric"><div class="v">'+m[k][1]+'</div><div class="l">'+m[k][0]+'</div></div>';
+  h+='<div class="metric full"><div class="v">'+path+'</div><div class="l">Critical Path</div></div>';
+  document.getElementById('health').innerHTML=h;
+}
+
+/* ================= AON NETWORK ================= */
+function renderNetwork(acts,res,order,succ,cp){
+  var level={},a;
+  for(var i=0;i<order.length;i++){a=order[i];var lv=-1;for(var j=0;j<acts[a].preds.length;j++)lv=Math.max(lv,level[acts[a].preds[j]]);level[a]=lv+1;}
+  var byLevel={},maxLv=0;
+  for(a in level){if(!byLevel[level[a]])byLevel[level[a]]=[];byLevel[level[a]].push(a);maxLv=Math.max(maxLv,level[a]);}
+  var critSet={};for(var c=0;c<cp.length;c++)critSet[cp[c]]=1;
+
+  var NW=92,NH=92,COLW=200,ROWH=130,padX=130,padY=60;
+  var pos={},maxRow=0;
+  for(var L=0;L<=maxLv;L++){
+    var nodes=(byLevel[L]||[]).slice().sort(function(x,y){return (critSet[y]?1:0)-(critSet[x]?1:0);});
+    var rowCursor=0,used={};
+    for(var n=0;n<nodes.length;n++){
+      var node=nodes[n],r;
+      if(critSet[node])r=0; else {rowCursor++; r=(rowCursor%2?1:-1)*Math.ceil(rowCursor/2);}
+      while(used[r])r+=(r>=0?1:-1);
+      used[r]=1;pos[node]={lv:L,row:r};maxRow=Math.max(maxRow,Math.abs(r));
+    }
+  }
+  function xy(node){return {x:padX+pos[node].lv*COLW, y:padY+(maxRow+pos[node].row)*ROWH};}
+  var svgW=padX+maxLv*COLW+NW+170, svgH=padY*2+maxRow*2*ROWH+NH;
+  var centreY=padY+maxRow*ROWH+NH/2;
+  var startX=20,endX=svgW-95;
+
+  var critEdge={};for(var e=0;e<cp.length-1;e++)critEdge[cp[e]+'>'+cp[e+1]]=1;
+  function arrow(x1,y1,x2,y2,crit){var mx=(x1+x2)/2;return '<path d="M'+x1+','+y1+' C'+mx+','+y1+' '+mx+','+y2+' '+x2+','+y2+'" fill="none" stroke="'+(crit?'#ef4444':'#1f2937')+'" stroke-width="'+(crit?3.5:2)+'" marker-end="url(#'+(crit?'aC':'aN')+')"/>';}
+
+  var edges='';
+  for(a in acts){if(acts[a].preds.length===0){var p=xy(a);edges+=arrow(startX+60,centreY,p.x,p.y+NH/2,false);}}
+  for(a in acts){var pa=xy(a);for(var s=0;s<succ[a].length;s++){var ps=xy(succ[a][s]);edges+=arrow(pa.x+NW,pa.y+NH/2,ps.x,ps.y+NH/2,!!critEdge[a+'>'+succ[a][s]]);}}
+  for(a in acts){if(!succ[a].length){var pe=xy(a);edges+=arrow(pe.x+NW,pe.y+NH/2,endX,centreY,false);}}
+
+  var nodesSvg='';
+  for(a in acts){
+    var pp=xy(a),r=res[a],crit=critSet[a],x=pp.x,y=pp.y;
+    var stroke=crit?'#ef4444':'#c2780c',sw=crit?3:1.5;
+    nodesSvg+='<g>'+
+      '<rect x="'+x+'" y="'+y+'" width="'+NW+'" height="'+NH+'" rx="3" fill="#f5a623" stroke="'+stroke+'" stroke-width="'+sw+'"/>'+
+      '<text x="'+(x+22)+'" y="'+(y+16)+'" fill="#0b3d91" font-size="11" font-weight="700" text-anchor="middle">TF '+r.TF+'</text>'+
+      '<text x="'+(x+NW-22)+'" y="'+(y+16)+'" fill="#0b3d91" font-size="11" font-weight="700" text-anchor="middle">FF '+r.FF+'</text>'+
+      '<text x="'+(x+22)+'" y="'+(y+38)+'" fill="#0b3d91" font-size="11" font-weight="700" text-anchor="middle">ES '+r.ES+'</text>'+
+      '<text x="'+(x+NW-22)+'" y="'+(y+38)+'" fill="#0b3d91" font-size="11" font-weight="700" text-anchor="middle">EF '+r.EF+'</text>'+
+      '<text x="'+(x+NW/2)+'" y="'+(y+58)+'" fill="#111" font-size="16" font-weight="800" text-anchor="middle">'+a+'</text>'+
+      '<text x="'+(x+22)+'" y="'+(y+80)+'" fill="#0b3d91" font-size="11" font-weight="700" text-anchor="middle">LS '+r.LS+'</text>'+
+      '<text x="'+(x+NW-22)+'" y="'+(y+80)+'" fill="#0b3d91" font-size="11" font-weight="700" text-anchor="middle">LF '+r.LF+'</text>'+
+      '</g>';
+  }
+
+  document.getElementById('network').innerHTML=
+    '<svg viewBox="0 0 '+svgW+' '+svgH+'" style="min-width:'+svgW+'px">'+
+    '<defs>'+
+      '<marker id="aC" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#ef4444"/></marker>'+
+      '<marker id="aN" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#1f2937"/></marker>'+
+    '</defs>'+edges+
+    '<circle cx="'+(startX+30)+'" cy="'+centreY+'" r="30" fill="#38bdf8"/>'+
+    '<text x="'+(startX+30)+'" y="'+(centreY+4)+'" fill="#04293a" font-size="11" font-weight="800" text-anchor="middle">START</text>'+
+    '<circle cx="'+(endX+35)+'" cy="'+centreY+'" r="30" fill="#38bdf8"/>'+
+    '<text x="'+(endX+35)+'" y="'+(centreY+4)+'" fill="#04293a" font-size="12" font-weight="800" text-anchor="middle">END</text>'+
+    nodesSvg+'</svg>';
+}
+
+/* ================= GANTT ================= */
+function renderGantt(acts,res,duration){
+  var ids=Object.keys(acts).sort(function(a,b){return res[a].ES-res[b].ES||(a<b?-1:1);});
+  var rowH=30,padL=120,padT=24,padR=20,padB=30,W=900,plotW=W-padL-padR;
+  var H=ids.length*rowH+padT+padB;
+  function sx(v){return padL+(v/duration)*plotW;}
+  var grid='',step=Math.max(1,Math.ceil(duration/10));
+  for(var t=0;t<=duration;t+=step)grid+='<line x1="'+sx(t)+'" y1="'+padT+'" x2="'+sx(t)+'" y2="'+(H-padB)+'" stroke="#334155" stroke-dasharray="2,3"/><text x="'+sx(t)+'" y="'+(H-padB+16)+'" fill="#94a3b8" font-size="11" text-anchor="middle">'+t+'</text>';
+  var bars='';
+  for(var i=0;i<ids.length;i++){
+    var a=ids[i],r=res[a],y=padT+i*rowH+4,h=rowH-12,x=sx(r.ES),w=sx(r.EF)-sx(r.ES);
+    bars+='<text x="'+(padL-8)+'" y="'+(y+h/2+4)+'" fill="#e2e8f0" font-size="12" text-anchor="end">'+acts[a].name+'</text>';
+    if(r.TF>0)bars+='<rect x="'+sx(r.EF)+'" y="'+y+'" width="'+(sx(r.EF+r.TF)-sx(r.EF))+'" height="'+h+'" fill="url(#hatch)" stroke="#475569" rx="3"/>';
+    bars+='<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="4" fill="'+(r.critical?'#ef4444':'#3b82f6')+'"/><text x="'+(x+w/2)+'" y="'+(y+h/2+4)+'" fill="#fff" font-size="11" font-weight="600" text-anchor="middle">'+a+'</text>';
+  }
+  document.getElementById('gantt').innerHTML='<svg viewBox="0 0 '+W+' '+H+'"><defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="#334155"/><line x1="0" y1="0" x2="0" y2="6" stroke="#64748b" stroke-width="2"/></pattern></defs>'+grid+bars+'</svg>';
+}
+
+/* ================= RESOURCE ================= */
+function renderResource(acts,res,duration){
+  var T=Math.ceil(duration),load=[];for(var z=0;z<T;z++)load[z]=0;
+  for(var a in acts){var s=Math.round(res[a].ES);for(var t=s;t<s+acts[a].dur;t++)if(t<T)load[t]+=acts[a].res;}
+  var peak=1,sum=0;for(var i=0;i<T;i++){peak=Math.max(peak,load[i]);sum+=load[i];}
+  var avg=sum/T;
+  var W=900,H=240,padL=50,padB=30,padT=20,padR=20,plotW=W-padL-padR,plotH=H-padT-padB,bw=plotW/T;
+  function sy(v){return padT+plotH-(v/peak)*plotH;}
+  var bars='';for(var b=0;b<T;b++){var x=padL+b*bw,y=sy(load[b]);bars+='<rect x="'+x+'" y="'+y+'" width="'+(bw-1)+'" height="'+(padT+plotH-y)+'" fill="#22c55e" opacity=".85"/>';}
+  var yt='';for(var k=0;k<=peak;k+=Math.max(1,Math.ceil(peak/5)))yt+='<text x="'+(padL-8)+'" y="'+(sy(k)+4)+'" fill="#94a3b8" font-size="11" text-anchor="end">'+k+'</text><line x1="'+padL+'" y1="'+sy(k)+'" x2="'+(W-padR)+'" y2="'+sy(k)+'" stroke="#334155" stroke-dasharray="2,3"/>';
+  var xt='';for(var m=0;m<=T;m+=Math.max(1,Math.ceil(T/10)))xt+='<text x="'+(padL+m*bw)+'" y="'+(H-padB+16)+'" fill="#94a3b8" font-size="11" text-anchor="middle">'+m+'</text>';
+  document.getElementById('resource').innerHTML='<svg viewBox="0 0 '+W+' '+H+'">'+yt+bars+xt+'<line x1="'+padL+'" y1="'+sy(avg)+'" x2="'+(W-padR)+'" y2="'+sy(avg)+'" stroke="#ef4444" stroke-width="2" stroke-dasharray="6,4"/><text x="'+(W-padR)+'" y="'+(sy(avg)-4)+'" fill="#ef4444" font-size="11" text-anchor="end">Avg '+avg.toFixed(1)+'</text></svg>';
+}
+
+/* ================= WIRE UP (bulletproof) ================= */
+function wire(id,fn){
+  var el=document.getElementById(id);
+  if(el){el.onclick=fn;el.addEventListener('click',fn);}
+}
+function init(){
+  wire('btnAdd',function(){addRow();});
+  wire('btnDemo',function(){loadDemo();evaluate();});
+  wire('btnClear',function(){clearAll();});
+  wire('btnEval',function(){evaluate();});
+  var body=document.getElementById('actBody');
+  if(body)body.addEventListener('click',function(e){if(e.target&&e.target.className==='del')e.target.parentNode.parentNode.remove();});
+  loadDemo();
+  evaluate();
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);
+else init();
+</script>
+</body>
+</html>
