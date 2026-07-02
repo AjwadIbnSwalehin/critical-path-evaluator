@@ -133,19 +133,17 @@ function addRow(id,name,dur,preds,res){
 function clearAll(){document.getElementById('actBody').innerHTML='';}
 function loadDemo(){
   clearAll();
-  // Company Website Development Project
+  // Simplified Website Development — cleaner linear-ish flow
   var d=[
-    ["A","Requirements Gathering",3,"",2],
-    ["B","Wireframes & UX Design",4,"A",2],
-    ["C","Content Writing",5,"A",1],
-    ["D","UI/Visual Design",4,"B",2],
-    ["E","Frontend Development",6,"D",3],
-    ["F","Backend/API Development",7,"D",3],
-    ["G","Database Setup",3,"B",2],
-    ["H","Integration",4,"E,F,G",4],
-    ["I","Content Upload",2,"C,H",1],
-    ["J","Testing & QA",4,"I",3],
-    ["K","Deployment & Launch",2,"J",3]
+    ["A","Requirements",3,"",2],
+    ["B","UX/Wireframes",4,"A",2],
+    ["C","Visual Design",4,"B",2],
+    ["D","Frontend Dev",6,"C",3],
+    ["E","Backend Dev",7,"C",3],
+    ["F","Integration",4,"D,E",4],
+    ["G","Content Load",3,"F",1],
+    ["H","Testing & QA",4,"G",3],
+    ["I","Deployment",2,"H",3]
   ];
   for(var i=0;i<d.length;i++)addRow(d[i][0],d[i][1],d[i][2],d[i][3],d[i][4]);
 }
